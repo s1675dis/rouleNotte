@@ -30,6 +30,30 @@ async function ensureSchema() {
   }
 }
 
+async function normalizeDirections() {
+  const anchor = await env.DB.prepare(`
+    SELECT s.id, s.direction,
+      (SELECT COUNT(*) FROM spins p WHERE p.id <= s.id) AS sequence
+    FROM spins s
+    WHERE s.direction IS NOT NULL
+    ORDER BY s.id ASC
+    LIMIT 1
+  `).first<{ id: number; direction: Direction; sequence: number }>();
+  if (!anchor) return;
+
+  const opposite: Direction = anchor.direction === "right" ? "left" : "right";
+  await env.DB.prepare(`
+    WITH ordered AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS sequence FROM spins
+    )
+    UPDATE spins
+    SET direction = CASE
+      WHEN ABS((SELECT sequence FROM ordered WHERE ordered.id = spins.id) - ?) % 2 = 0 THEN ?
+      ELSE ?
+    END
+  `).bind(Number(anchor.sequence), anchor.direction, opposite).run();
+}
+
 function sectorOf(number: number): Sector {
   return SECTOR_KEYS.find((sector) => SECTORS[sector].has(number)) ?? "T";
 }
@@ -238,6 +262,7 @@ export async function DELETE(request: Request) {
       return Response.json({ error: "有効なIDが必要です" }, { status: 400 });
     }
     await env.DB.prepare("DELETE FROM spins WHERE id = ?").bind(id).run();
+    await normalizeDirections();
     return Response.json({ ok: true });
   } catch {
     return Response.json({ error: "削除できませんでした" }, { status: 500 });

@@ -1,56 +1,37 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-type Spin = {
-  id: number;
-  number: number;
-  direction: "right" | "left" | null;
-  createdAt: string;
-};
-
-type DirectionChoice = "auto" | "right" | "left";
+type Direction = "right" | "left";
 type Sector = "Z" | "G" | "O" | "T";
+type Spin = { id: number; number: number; direction: Direction | null; createdAt: string };
 type Prediction = {
   recommended: Sector | null;
-  nextDirection: "right" | "left" | null;
+  nextDirection: Direction | null;
   scores: Record<Sector, number>;
   confidence: "データ収集中" | "低" | "中" | "高";
   sampleSize: number;
   factors: { longTerm: number; recent: number; transition: number; direction: number };
 };
-
 type StateResponse = { spins: Spin[]; hiddenCount: number; prediction: Prediction };
 
-const RED_NUMBERS = new Set([
-  1, 3, 5, 7, 9, 12, 14, 16, 18,
-  19, 21, 23, 25, 27, 30, 32, 34, 36,
-]);
-
+const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
 const SECTORS = {
   Z: new Set([0, 3, 12, 15, 26, 32, 35]),
   G: new Set([2, 4, 7, 18, 19, 21, 22, 25, 28, 29]),
   O: new Set([1, 6, 9, 14, 17, 20, 31, 34]),
   T: new Set([5, 8, 10, 11, 13, 16, 23, 24, 27, 30, 33, 36]),
 } as const;
-
-const BOARD_ROWS = [
-  { label: "A", numbers: Array.from({ length: 12 }, (_, index) => (index + 1) * 3) },
-  { label: "B", numbers: Array.from({ length: 12 }, (_, index) => (index + 1) * 3 - 1) },
-  { label: "C", numbers: Array.from({ length: 12 }, (_, index) => (index + 1) * 3 - 2) },
-];
+const SECTOR_KEYS: Sector[] = ["Z", "G", "O", "T"];
 
 function notationFor(number: number) {
   if (number === 0) return null;
-
   const remainder = number % 3;
-  const row = remainder === 0 ? "A" : remainder === 2 ? "B" : "C";
-  const dozen = Math.ceil(number / 12).toString();
-  const sector = (Object.keys(SECTORS) as Array<keyof typeof SECTORS>).find((key) =>
-    SECTORS[key].has(number),
-  ) ?? "";
-
-  return { row, dozen, sector };
+  return {
+    row: remainder === 0 ? "A" : remainder === 2 ? "B" : "C",
+    dozen: Math.ceil(number / 12).toString(),
+    sector: SECTOR_KEYS.find((sector) => SECTORS[sector].has(number)) ?? "",
+  };
 }
 
 function numberColor(number: number) {
@@ -58,36 +39,28 @@ function numberColor(number: number) {
   return RED_NUMBERS.has(number) ? "red" : "black";
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
-}
-
-function NotationCard({ spin, featured = false }: { spin: Spin; featured?: boolean }) {
+function RecordTile({ spin, armed, onTap }: { spin: Spin; armed: boolean; onTap: () => void }) {
   const notation = notationFor(spin.number);
-
   return (
-    <article className={`notation-card ${featured ? "featured" : ""} ${spin.number === 0 ? "zero-card" : ""}`}>
-      {spin.direction && (
-        <span className={`direction-badge ${spin.direction}`} title={spin.direction === "right" ? "右回り" : "左回り"}>
-          {spin.direction === "right" ? "↻ 右" : "↺ 左"}
-        </span>
-      )}
+    <button
+      type="button"
+      className={`record-tile ${armed ? "armed" : ""} ${spin.number === 0 ? "is-zero" : ""}`}
+      onClick={onTap}
+      aria-label={`${spin.number}の記録。2回タップで削除`}
+    >
+      {spin.direction && <span className={`tile-direction ${spin.direction}`}>{spin.direction === "right" ? "↻" : "↺"}</span>}
       {spin.number === 0 ? (
-        <div className="zero-mark">0</div>
+        <span className="tile-zero">0</span>
       ) : (
         <>
-          <div className={`result-number ${numberColor(spin.number)}`}>{spin.number}</div>
-          <div className="notation-value">{notation?.row}</div>
-          <div className="notation-value">{notation?.dozen}</div>
-          <div className="notation-value sector-value">{notation?.sector}</div>
+          <span className={`tile-number ${numberColor(spin.number)}`}>{spin.number}</span>
+          <span className="tile-code">{notation?.row}</span>
+          <span className="tile-code">{notation?.dozen}</span>
+          <span className="tile-code sector">{notation?.sector}</span>
         </>
       )}
-      {!featured && <time dateTime={spin.createdAt}>{formatTime(spin.createdAt)}</time>}
-    </article>
+      {armed && <span className="delete-hint">もう一度</span>}
+    </button>
   );
 }
 
@@ -95,83 +68,106 @@ export function RouletteRecorder() {
   const [spins, setSpins] = useState<Spin[]>([]);
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [hiddenCount, setHiddenCount] = useState(0);
-  const [directionChoice, setDirectionChoice] = useState<DirectionChoice>("auto");
-  const [input, setInput] = useState("");
+  const [draft, setDraft] = useState("");
+  const [chosenDirection, setChosenDirection] = useState<Direction | null>(null);
+  const [armedId, setArmedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const disarmTimer = useRef<number | null>(null);
 
   const loadState = useCallback(async () => {
-    return fetch("/api/spins")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("履歴を読み込めませんでした");
-        return response.json() as Promise<StateResponse>;
-      })
-      .then((data) => {
-        setSpins(data.spins);
-        setPrediction(data.prediction);
-        setHiddenCount(data.hiddenCount);
-      });
+    const response = await fetch("/api/spins");
+    if (!response.ok) throw new Error("履歴を読み込めませんでした");
+    const data = (await response.json()) as StateResponse;
+    setSpins(data.spins);
+    setPrediction(data.prediction);
+    setHiddenCount(data.hiddenCount);
   }, []);
 
   useEffect(() => {
     loadState()
-      .catch(() => setNotice("履歴の読み込みに失敗しました。再読み込みしてください。"))
+      .catch(() => setNotice("履歴の読み込みに失敗しました"))
       .finally(() => setLoading(false));
   }, [loadState]);
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 3200);
+    const timer = window.setTimeout(() => setNotice(""), 2200);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const latest = spins[0];
-  const parsedInput = Number(input);
-  const inputIsValid = /^\d{1,2}$/.test(input) && Number.isInteger(parsedInput) && parsedInput >= 0 && parsedInput <= 36;
+  const appendDigit = useCallback((digit: string) => {
+    setDraft((current) => {
+      const next = current === "0" ? digit : `${current}${digit}`;
+      if (next.length > 2 || Number(next) > 36) {
+        setNotice("0〜36を入力してください");
+        return current;
+      }
+      return next;
+    });
+  }, []);
 
-  const addSpin = useCallback(async (number: number) => {
-    if (saving || number < 0 || number > 36) return;
+  const recordSpin = useCallback(async () => {
+    if (saving || draft === "") return;
+    const number = Number(draft);
     setSaving(true);
     try {
       const response = await fetch("/api/spins", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number, direction: directionChoice === "auto" ? null : directionChoice }),
+        body: JSON.stringify({ number, direction: chosenDirection }),
       });
-      const data = (await response.json()) as { spin?: Spin; error?: string };
+      const data = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(data.error ?? "記録できませんでした");
       await loadState();
-      setInput("");
-      setDirectionChoice("auto");
+      setDraft("");
+      setChosenDirection(null);
       setNotice(`${number} を記録しました`);
-      inputRef.current?.focus();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "記録に失敗しました。もう一度お試しください。");
+      setNotice(error instanceof Error ? error.message : "記録に失敗しました");
     } finally {
       setSaving(false);
     }
-  }, [directionChoice, loadState, saving]);
+  }, [chosenDirection, draft, loadState, saving]);
 
-  function submitInput(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (inputIsValid) void addSpin(parsedInput);
-  }
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (/^\d$/.test(event.key)) appendDigit(event.key);
+      if (event.key === "Backspace") setDraft((current) => current.slice(0, -1));
+      if (event.key === "Escape") setDraft("");
+      if (event.key === "Enter") void recordSpin();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [appendDigit, recordSpin]);
 
-  async function undoLatest() {
-    if (!latest || saving) return;
+  async function deleteSpin(id: number) {
+    if (saving) return;
     setSaving(true);
     try {
-      const response = await fetch(`/api/spins?id=${latest.id}`, { method: "DELETE" });
-      if (!response.ok) throw new Error("取り消せませんでした");
+      const response = await fetch(`/api/spins?id=${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("削除できませんでした");
       await loadState();
-      setNotice(`${latest.number} の記録を取り消しました`);
-    } catch {
-      setNotice("取り消しに失敗しました。");
+      setNotice("記録を削除しました");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "削除に失敗しました");
     } finally {
       setSaving(false);
     }
+  }
+
+  function tapRecord(id: number) {
+    if (armedId === id) {
+      if (disarmTimer.current) window.clearTimeout(disarmTimer.current);
+      setArmedId(null);
+      void deleteSpin(id);
+      return;
+    }
+    setArmedId(id);
+    setNotice("もう一度タップすると削除します");
+    if (disarmTimer.current) window.clearTimeout(disarmTimer.current);
+    disarmTimer.current = window.setTimeout(() => setArmedId(null), 900);
   }
 
   async function clearHistory() {
@@ -183,192 +179,95 @@ export function RouletteRecorder() {
       await loadState();
       setNotice("すべての記録を削除しました");
     } catch {
-      setNotice("履歴の削除に失敗しました。");
+      setNotice("履歴の削除に失敗しました");
     } finally {
       setSaving(false);
     }
   }
 
-  const sessionSummary = useMemo(() => {
-    const red = spins.filter((spin) => RED_NUMBERS.has(spin.number)).length;
-    const black = spins.filter((spin) => spin.number !== 0 && !RED_NUMBERS.has(spin.number)).length;
-    const zero = spins.filter((spin) => spin.number === 0).length;
-    return { red, black, zero };
-  }, [spins]);
-
-  const nextDirectionLabel = prediction?.nextDirection === "right"
-    ? "右回り"
-    : prediction?.nextDirection === "left" ? "左回り" : "未確定";
+  const displayedDirection = chosenDirection ?? prediction?.nextDirection ?? null;
 
   return (
-    <main>
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true"><span>R</span></div>
-        <div className="brand-copy">
-          <p>EUROPEAN ROULETTE</p>
-          <h1>Roulette Notes</h1>
-        </div>
-        <div className="session-pill"><span className="live-dot" /> SESSION <b>{prediction?.sampleSize ?? spins.length}</b></div>
+    <main className="mobile-app">
+      <header className="compact-header">
+        <div className="compact-brand"><span>R</span><strong>Roulette Notes</strong></div>
+        <div className="record-count"><b>{prediction?.sampleSize ?? spins.length}</b><span>SPINS</span></div>
       </header>
 
-      <div className="workspace">
-        <section className="entry-panel" aria-labelledby="entry-title">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">NEW SPIN</span>
-              <h2 id="entry-title">出目を記録</h2>
-            </div>
-            <span className="keyboard-hint">0–36</span>
-          </div>
-
-          <form className="quick-entry" onSubmit={submitInput}>
-            <label htmlFor="number-input">数字を直接入力</label>
-            <div className="input-row">
-              <input
-                ref={inputRef}
-                id="number-input"
-                inputMode="numeric"
-                autoComplete="off"
-                value={input}
-                onChange={(event) => setInput(event.target.value.replace(/\D/g, "").slice(0, 2))}
-                placeholder="例：32"
-                aria-invalid={input.length > 0 && !inputIsValid}
-              />
-              <button className="record-button" type="submit" disabled={!inputIsValid || saving}>記録する</button>
-            </div>
-          </form>
-
-          <fieldset className="direction-fieldset">
-            <legend>この回の回転方向</legend>
-            <div className="direction-controls">
-              {([
-                ["auto", prediction?.nextDirection ? `自動（${nextDirectionLabel}）` : "自動"],
-                ["right", "↻ 右回り"],
-                ["left", "↺ 左回り"],
-              ] as Array<[DirectionChoice, string]>).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={directionChoice === value ? "active" : ""}
-                  aria-pressed={directionChoice === value}
-                  onClick={() => setDirectionChoice(value)}
-                >{label}</button>
-              ))}
-            </div>
-            <p>方向が一度確定すると、前後の記録へ右・左を交互に自動補完します。</p>
-          </fieldset>
-
-          <div className="board-wrap" aria-label="ルーレット数字盤">
-            <div className="board-corner">ROW</div>
-            <button className="number-button zero-button" onClick={() => void addSpin(0)} disabled={saving}>0</button>
-            {BOARD_ROWS.map((row, rowIndex) => (
-              <div className="board-row" key={row.label}>
-                <span className="row-label">{row.label}</span>
-                {row.numbers.map((number) => (
-                  <button
-                    key={number}
-                    className={`number-button ${numberColor(number)}`}
-                    onClick={() => void addSpin(number)}
-                    disabled={saving}
-                    aria-label={`${number}を記録`}
-                  >
-                    {number}
-                  </button>
-                ))}
-                {rowIndex === 2 && <span className="dozen-guide" aria-hidden="true">1st DOZEN　　2nd DOZEN　　3rd DOZEN</span>}
-              </div>
+      <section className="records-panel" aria-labelledby="records-title">
+        <div className="records-toolbar">
+          <h1 id="records-title">ゲーム記録</h1>
+          <span>2回タップで削除</span>
+          <button type="button" onClick={clearHistory} disabled={!spins.length || saving}>全消去</button>
+        </div>
+        {loading ? (
+          <div className="records-empty">読み込み中…</div>
+        ) : spins.length ? (
+          <div className="records-grid">
+            {spins.map((spin) => (
+              <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} onTap={() => tapRecord(spin.id)} />
             ))}
           </div>
-        </section>
+        ) : (
+          <div className="records-empty">下の数字キーから最初の出目を記録</div>
+        )}
+        {hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}
+      </section>
 
-        <aside className="preview-panel" aria-labelledby="preview-title">
-          <div className="section-heading light-heading">
-            <div>
-              <span className="eyebrow">LATEST</span>
-              <h2 id="preview-title">最新の表記</h2>
-            </div>
-            {latest && <button className="undo-button" onClick={undoLatest} disabled={saving}>↶ 取り消す</button>}
-          </div>
-          <div className="preview-stage">
-            {latest ? (
-              <NotationCard spin={latest} featured />
-            ) : (
-              <div className="empty-preview">
-                <span>—</span>
-                <p>数字を選ぶと<br />ここに表記されます</p>
-              </div>
-            )}
-          </div>
-          <div className="next-direction">
-            <span>NEXT ROTATION</span>
-            <b>{prediction?.nextDirection === "right" ? "↻" : prediction?.nextDirection === "left" ? "↺" : "—"} {nextDirectionLabel}</b>
-          </div>
-          <div className="notation-key">
-            <div><b>A B C</b><span>ベットエリアの横列</span></div>
-            <div><b>1 2 3</b><span>1st / 2nd / 3rd ダズン</span></div>
-            <div><b>Z G O T</b><span>ホイールセクター</span></div>
-          </div>
-        </aside>
-      </div>
-
-      <section className="prediction-section" aria-labelledby="prediction-title">
-        <div className="prediction-copy">
-          <span className="eyebrow">TREND FORECAST</span>
-          <h2 id="prediction-title">次のエリア傾向</h2>
-          <p>全期間・直近96回・前回エリアからの遷移・次回転方向の偏りを合成</p>
+      <section className="forecast-strip" aria-label="次のエリア傾向">
+        <div className="forecast-lead">
+          <span>NEXT AREA</span>
+          <b>{prediction?.recommended ?? "—"}</b>
+          <small>強度 {prediction?.confidence ?? "—"}</small>
         </div>
-        <div className="prediction-result">
-          <span>現在の最上位</span>
-          <strong>{prediction?.recommended ?? "—"}</strong>
-          <em>{prediction?.recommended ? "エリア" : "記録待ち"}</em>
-        </div>
-        <div className="sector-scores">
-          {(["Z", "G", "O", "T"] as Sector[]).map((sector) => (
-            <div className={prediction?.recommended === sector ? "top-sector" : ""} key={sector}>
+        <div className="forecast-scores">
+          {SECTOR_KEYS.map((sector) => (
+            <div className={prediction?.recommended === sector ? "forecast-top" : ""} key={sector}>
               <span><b>{sector}</b><i>{prediction?.scores[sector] ?? 0}%</i></span>
-              <div className="score-track"><span style={{ width: `${prediction?.scores[sector] ?? 0}%` }} /></div>
+              <em><i style={{ width: `${prediction?.scores[sector] ?? 0}%` }} /></em>
             </div>
           ))}
         </div>
-        <div className="confidence-box">
-          <span>判定強度</span>
-          <b>{prediction?.confidence ?? "データ収集中"}</b>
-          <small>{prediction?.sampleSize ?? 0}回を分析</small>
-        </div>
-        <p className="prediction-caution">傾向スコアは過去データの統計表示であり、次の出目を保証するものではありません。</p>
+        <p>過去傾向の統計表示です。出目を保証するものではありません。</p>
       </section>
 
-      <section className="history-section" aria-labelledby="history-title">
-        <div className="history-header">
-          <div>
-            <span className="eyebrow">GAME LOG</span>
-            <h2 id="history-title">ゲーム記録</h2>
+      <section className="calculator" aria-label="出目入力">
+        <div className="calculator-top">
+          <div className="number-display">
+            <span>NUMBER · 0–36</span>
+            <b>{draft || "—"}</b>
           </div>
-          <div className="history-actions">
-            <div className="mini-stats" aria-label="色別集計">
-              <span><i className="stat-dot red" />{sessionSummary.red}</span>
-              <span><i className="stat-dot black" />{sessionSummary.black}</span>
-              <span><i className="stat-dot green" />{sessionSummary.zero}</span>
-            </div>
-            <button className="clear-button" onClick={clearHistory} disabled={!spins.length || saving}>すべて削除</button>
+          <div className="rotation-buttons" aria-label="回転方向">
+            <button
+              type="button"
+              className={displayedDirection === "left" ? "active" : ""}
+              onClick={() => setChosenDirection("left")}
+              aria-pressed={displayedDirection === "left"}
+            ><span>↺</span> 左</button>
+            <button
+              type="button"
+              className={displayedDirection === "right" ? "active" : ""}
+              onClick={() => setChosenDirection("right")}
+              aria-pressed={displayedDirection === "right"}
+            ><span>↻</span> 右</button>
           </div>
         </div>
 
-        {loading ? (
-          <div className="history-empty">記録を読み込んでいます…</div>
-        ) : spins.length ? (
-          <>
-            <div className="history-strip">
-              {spins.map((spin) => <NotationCard key={spin.id} spin={spin} />)}
-            </div>
-            {hiddenCount > 0 && <p className="hidden-history">さらに過去の {hiddenCount.toLocaleString("ja-JP")} 回も長期分析に含まれています</p>}
-          </>
-        ) : (
-          <div className="history-empty"><span>まだ記録がありません</span><small>最初の出目を上の数字盤から選んでください</small></div>
-        )}
+        <div className="calculator-body">
+          <div className="number-pad">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
+              <button type="button" key={digit} onClick={() => appendDigit(String(digit))}>{digit}</button>
+            ))}
+            <button type="button" className="key-muted" onClick={() => setDraft("")}>C</button>
+            <button type="button" onClick={() => appendDigit("0")}>0</button>
+            <button type="button" className="key-muted" onClick={() => setDraft((current) => current.slice(0, -1))} aria-label="1文字消す">⌫</button>
+          </div>
+          <button type="button" className="send-button" onClick={() => void recordSpin()} disabled={draft === "" || saving}>
+            <span>{saving ? "…" : "記録"}</span><i>ENTER</i>
+          </button>
+        </div>
       </section>
 
-      <footer>EUROPEAN SINGLE-ZERO · PERSONAL NOTATION LOG</footer>
       {notice && <div className="toast" role="status">{notice}</div>}
     </main>
   );
