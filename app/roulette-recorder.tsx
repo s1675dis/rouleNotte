@@ -189,17 +189,13 @@ export function RouletteRecorder() {
 
   return (
     <main className="mobile-app">
-      <header className="compact-header">
-        <div className="compact-brand"><span>R</span><strong>Roulette Notes</strong></div>
-        <div className="record-count"><b>{prediction?.sampleSize ?? spins.length}</b><span>SPINS</span></div>
+      <header className="memo-toolbar">
+        <span aria-hidden="true" />
+        <button type="button" onClick={clearHistory} disabled={!spins.length || saving} aria-label="すべて削除">⋮</button>
       </header>
 
       <section className="records-panel" aria-labelledby="records-title">
-        <div className="records-toolbar">
-          <h1 id="records-title">ゲーム記録</h1>
-          <span>2回タップで削除</span>
-          <button type="button" onClick={clearHistory} disabled={!spins.length || saving}>全消去</button>
-        </div>
+        <h1 id="records-title" className="visually-hidden">メモ</h1>
         {loading ? (
           <div className="records-empty">読み込み中…</div>
         ) : spins.length ? (
@@ -209,32 +205,22 @@ export function RouletteRecorder() {
             ))}
           </div>
         ) : (
-          <div className="records-empty">下の数字キーから最初の出目を記録</div>
+          <div className="records-empty">メモはありません</div>
         )}
         {hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}
       </section>
 
-      <section className="forecast-strip" aria-label="次のエリア傾向">
-        <div className="forecast-lead">
-          <span>NEXT AREA</span>
-          <b>{prediction?.recommended ?? "—"}</b>
-          <small>強度 {prediction?.confidence ?? "—"}</small>
-        </div>
-        <div className="forecast-scores">
-          {SECTOR_KEYS.map((sector) => (
-            <div className={prediction?.recommended === sector ? "forecast-top" : ""} key={sector}>
-              <span><b>{sector}</b><i>{prediction?.scores[sector] ?? 0}%</i></span>
-              <em><i style={{ width: `${prediction?.scores[sector] ?? 0}%` }} /></em>
-            </div>
-          ))}
-        </div>
-        <p>過去傾向の統計表示です。出目を保証するものではありません。</p>
+      <section className="forecast-strip" aria-label="確率">
+        {SECTOR_KEYS.map((sector) => (
+          <span className={prediction?.recommended === sector ? "forecast-top" : ""} key={sector}>
+            <b>{sector}</b><i>{prediction?.scores[sector] ?? 0}%</i>
+          </span>
+        ))}
       </section>
 
       <section className="calculator" aria-label="出目入力">
         <div className="calculator-top">
           <div className="number-display">
-            <span>NUMBER · 0–36</span>
             <b>{draft || "—"}</b>
           </div>
           <div className="rotation-buttons" aria-label="回転方向">
@@ -243,13 +229,13 @@ export function RouletteRecorder() {
               className={displayedDirection === "left" ? "active" : ""}
               onClick={() => setChosenDirection("left")}
               aria-pressed={displayedDirection === "left"}
-            ><span>↺</span> 左</button>
+            ><span>↺</span></button>
             <button
               type="button"
               className={displayedDirection === "right" ? "active" : ""}
               onClick={() => setChosenDirection("right")}
               aria-pressed={displayedDirection === "right"}
-            ><span>↻</span> 右</button>
+            ><span>↻</span></button>
           </div>
         </div>
 
@@ -263,7 +249,7 @@ export function RouletteRecorder() {
             <button type="button" className="key-muted" onClick={() => setDraft((current) => current.slice(0, -1))} aria-label="1文字消す">⌫</button>
           </div>
           <button type="button" className="send-button" onClick={() => void recordSpin()} disabled={draft === "" || saving}>
-            <span>{saving ? "…" : "記録"}</span><i>ENTER</i>
+            <span>{saving ? "…" : "✓"}</span>
           </button>
         </div>
       </section>
