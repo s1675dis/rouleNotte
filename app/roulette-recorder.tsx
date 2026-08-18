@@ -5,8 +5,22 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 type Spin = {
   id: number;
   number: number;
+  direction: "right" | "left" | null;
   createdAt: string;
 };
+
+type DirectionChoice = "auto" | "right" | "left";
+type Sector = "Z" | "G" | "O" | "T";
+type Prediction = {
+  recommended: Sector | null;
+  nextDirection: "right" | "left" | null;
+  scores: Record<Sector, number>;
+  confidence: "データ収集中" | "低" | "中" | "高";
+  sampleSize: number;
+  factors: { longTerm: number; recent: number; transition: number; direction: number };
+};
+
+type StateResponse = { spins: Spin[]; hiddenCount: number; prediction: Prediction };
 
 const RED_NUMBERS = new Set([
   1, 3, 5, 7, 9, 12, 14, 16, 18,
@@ -57,6 +71,11 @@ function NotationCard({ spin, featured = false }: { spin: Spin; featured?: boole
 
   return (
     <article className={`notation-card ${featured ? "featured" : ""} ${spin.number === 0 ? "zero-card" : ""}`}>
+      {spin.direction && (
+        <span className={`direction-badge ${spin.direction}`} title={spin.direction === "right" ? "右回り" : "左回り"}>
+          {spin.direction === "right" ? "↻ 右" : "↺ 左"}
+        </span>
+      )}
       {spin.number === 0 ? (
         <div className="zero-mark">0</div>
       ) : (
@@ -74,22 +93,33 @@ function NotationCard({ spin, featured = false }: { spin: Spin; featured?: boole
 
 export function RouletteRecorder() {
   const [spins, setSpins] = useState<Spin[]>([]);
+  const [prediction, setPrediction] = useState<Prediction | null>(null);
+  const [hiddenCount, setHiddenCount] = useState(0);
+  const [directionChoice, setDirectionChoice] = useState<DirectionChoice>("auto");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    fetch("/api/spins")
+  const loadState = useCallback(async () => {
+    return fetch("/api/spins")
       .then(async (response) => {
         if (!response.ok) throw new Error("履歴を読み込めませんでした");
-        return response.json() as Promise<{ spins: Spin[] }>;
+        return response.json() as Promise<StateResponse>;
       })
-      .then((data) => setSpins(data.spins))
+      .then((data) => {
+        setSpins(data.spins);
+        setPrediction(data.prediction);
+        setHiddenCount(data.hiddenCount);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadState()
       .catch(() => setNotice("履歴の読み込みに失敗しました。再読み込みしてください。"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadState]);
 
   useEffect(() => {
     if (!notice) return;
@@ -108,20 +138,21 @@ export function RouletteRecorder() {
       const response = await fetch("/api/spins", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number }),
+        body: JSON.stringify({ number, direction: directionChoice === "auto" ? null : directionChoice }),
       });
-      if (!response.ok) throw new Error("記録できませんでした");
-      const data = (await response.json()) as { spin: Spin };
-      setSpins((current) => [data.spin, ...current]);
+      const data = (await response.json()) as { spin?: Spin; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "記録できませんでした");
+      await loadState();
       setInput("");
+      setDirectionChoice("auto");
       setNotice(`${number} を記録しました`);
       inputRef.current?.focus();
-    } catch {
-      setNotice("記録に失敗しました。もう一度お試しください。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "記録に失敗しました。もう一度お試しください。");
     } finally {
       setSaving(false);
     }
-  }, [saving]);
+  }, [directionChoice, loadState, saving]);
 
   function submitInput(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -134,7 +165,7 @@ export function RouletteRecorder() {
     try {
       const response = await fetch(`/api/spins?id=${latest.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("取り消せませんでした");
-      setSpins((current) => current.filter((spin) => spin.id !== latest.id));
+      await loadState();
       setNotice(`${latest.number} の記録を取り消しました`);
     } catch {
       setNotice("取り消しに失敗しました。");
@@ -149,7 +180,7 @@ export function RouletteRecorder() {
     try {
       const response = await fetch("/api/spins?all=true", { method: "DELETE" });
       if (!response.ok) throw new Error("削除できませんでした");
-      setSpins([]);
+      await loadState();
       setNotice("すべての記録を削除しました");
     } catch {
       setNotice("履歴の削除に失敗しました。");
@@ -165,6 +196,10 @@ export function RouletteRecorder() {
     return { red, black, zero };
   }, [spins]);
 
+  const nextDirectionLabel = prediction?.nextDirection === "right"
+    ? "右回り"
+    : prediction?.nextDirection === "left" ? "左回り" : "未確定";
+
   return (
     <main>
       <header className="topbar">
@@ -173,7 +208,7 @@ export function RouletteRecorder() {
           <p>EUROPEAN ROULETTE</p>
           <h1>Roulette Notes</h1>
         </div>
-        <div className="session-pill"><span className="live-dot" /> SESSION <b>{spins.length}</b></div>
+        <div className="session-pill"><span className="live-dot" /> SESSION <b>{prediction?.sampleSize ?? spins.length}</b></div>
       </header>
 
       <div className="workspace">
@@ -202,6 +237,26 @@ export function RouletteRecorder() {
               <button className="record-button" type="submit" disabled={!inputIsValid || saving}>記録する</button>
             </div>
           </form>
+
+          <fieldset className="direction-fieldset">
+            <legend>この回の回転方向</legend>
+            <div className="direction-controls">
+              {([
+                ["auto", prediction?.nextDirection ? `自動（${nextDirectionLabel}）` : "自動"],
+                ["right", "↻ 右回り"],
+                ["left", "↺ 左回り"],
+              ] as Array<[DirectionChoice, string]>).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={directionChoice === value ? "active" : ""}
+                  aria-pressed={directionChoice === value}
+                  onClick={() => setDirectionChoice(value)}
+                >{label}</button>
+              ))}
+            </div>
+            <p>方向が一度確定すると、前後の記録へ右・左を交互に自動補完します。</p>
+          </fieldset>
 
           <div className="board-wrap" aria-label="ルーレット数字盤">
             <div className="board-corner">ROW</div>
@@ -244,6 +299,10 @@ export function RouletteRecorder() {
               </div>
             )}
           </div>
+          <div className="next-direction">
+            <span>NEXT ROTATION</span>
+            <b>{prediction?.nextDirection === "right" ? "↻" : prediction?.nextDirection === "left" ? "↺" : "—"} {nextDirectionLabel}</b>
+          </div>
           <div className="notation-key">
             <div><b>A B C</b><span>ベットエリアの横列</span></div>
             <div><b>1 2 3</b><span>1st / 2nd / 3rd ダズン</span></div>
@@ -251,6 +310,33 @@ export function RouletteRecorder() {
           </div>
         </aside>
       </div>
+
+      <section className="prediction-section" aria-labelledby="prediction-title">
+        <div className="prediction-copy">
+          <span className="eyebrow">TREND FORECAST</span>
+          <h2 id="prediction-title">次のエリア傾向</h2>
+          <p>全期間・直近96回・前回エリアからの遷移・次回転方向の偏りを合成</p>
+        </div>
+        <div className="prediction-result">
+          <span>現在の最上位</span>
+          <strong>{prediction?.recommended ?? "—"}</strong>
+          <em>{prediction?.recommended ? "エリア" : "記録待ち"}</em>
+        </div>
+        <div className="sector-scores">
+          {(["Z", "G", "O", "T"] as Sector[]).map((sector) => (
+            <div className={prediction?.recommended === sector ? "top-sector" : ""} key={sector}>
+              <span><b>{sector}</b><i>{prediction?.scores[sector] ?? 0}%</i></span>
+              <div className="score-track"><span style={{ width: `${prediction?.scores[sector] ?? 0}%` }} /></div>
+            </div>
+          ))}
+        </div>
+        <div className="confidence-box">
+          <span>判定強度</span>
+          <b>{prediction?.confidence ?? "データ収集中"}</b>
+          <small>{prediction?.sampleSize ?? 0}回を分析</small>
+        </div>
+        <p className="prediction-caution">傾向スコアは過去データの統計表示であり、次の出目を保証するものではありません。</p>
+      </section>
 
       <section className="history-section" aria-labelledby="history-title">
         <div className="history-header">
@@ -271,9 +357,12 @@ export function RouletteRecorder() {
         {loading ? (
           <div className="history-empty">記録を読み込んでいます…</div>
         ) : spins.length ? (
-          <div className="history-strip">
-            {spins.map((spin) => <NotationCard key={spin.id} spin={spin} />)}
-          </div>
+          <>
+            <div className="history-strip">
+              {spins.map((spin) => <NotationCard key={spin.id} spin={spin} />)}
+            </div>
+            {hiddenCount > 0 && <p className="hidden-history">さらに過去の {hiddenCount.toLocaleString("ja-JP")} 回も長期分析に含まれています</p>}
+          </>
         ) : (
           <div className="history-empty"><span>まだ記録がありません</span><small>最初の出目を上の数字盤から選んでください</small></div>
         )}
