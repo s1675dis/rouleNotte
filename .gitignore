@@ -14,10 +14,11 @@
 # testing
 /coverage
 
-# next.js
+# generated framework and compiler caches
 /.next/
 /.vinext/
-/out/
+/.wrangler/
+*.tsbuildinfo
 
 # misc
 .DS_Store
@@ -32,10 +33,4 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
-# vercel
-.vercel
-
 /dist/
-/.wrangler/
-/outputs/
-/work/
