@@ -168,7 +168,7 @@ async function readState() {
   const analysisRows = [...descendingRows].reverse();
   const total = Number(totalResult?.count ?? 0);
   return {
-    spins: descendingRows.slice(0, 500).map(present),
+    spins: descendingRows.slice(0, 500).reverse().map(present),
     hiddenCount: Math.max(0, total - 500),
     prediction: calculatePrediction(analysisRows, longTermResult.results, directionResult.results, total),
   };
