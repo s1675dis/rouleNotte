@@ -1,1 +1,0 @@
-ALTER TABLE `spins` ADD `direction` text;
