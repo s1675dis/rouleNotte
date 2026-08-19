@@ -107,6 +107,33 @@ function calculateCoverage(allRows: Spin[]): CoverageRecommendation {
   return { columns: topTwo(columnScores), dozens: topTwo(dozenScores) };
 }
 
+function detectTrendSector(allRows: Spin[]): Sector | null {
+  const sequence = allRows.map((row) => sectorOf(row.number));
+  if (sequence.length < 4) return null;
+
+  for (let period = 1; period <= 4; period += 1) {
+    const span = period * 4;
+    if (sequence.length < span) continue;
+    const start = sequence.length - span;
+    const repeats = sequence.slice(start).every((sector, index) => sector === sequence[start + index % period]);
+    if (repeats) return sequence[start];
+  }
+
+  for (let contextLength = Math.min(6, sequence.length - 1); contextLength >= 2; contextLength -= 1) {
+    const context = sequence.slice(-contextLength);
+    const continuations = emptyCounts();
+    let matches = 0;
+    for (let start = 0; start + contextLength < sequence.length; start += 1) {
+      if (!context.every((sector, offset) => sequence[start + offset] === sector)) continue;
+      continuations[sequence[start + contextLength]] += 1;
+      matches += 1;
+    }
+    const ranked = [...SECTOR_KEYS].sort((a, b) => continuations[b] - continuations[a]);
+    if (continuations[ranked[0]] >= 4 && continuations[ranked[0]] / matches >= .6) return ranked[0];
+  }
+  return null;
+}
+
 function normalizeDirections(rows: Spin[]) {
   const anchor = rows.findIndex((row) => row.direction !== null); if (anchor < 0) return rows;
   const base = rows[anchor].direction as Direction;
@@ -194,12 +221,13 @@ export function RouletteRecorder() {
   const highlightIndex = highlightAnchor === undefined ? -1 : WHEEL_INDEX.get(highlightAnchor) ?? -1;
   const highlightedNumbers = highlightIndex < 0 ? new Set<number>() : new Set<number>([EUROPEAN_WHEEL[(highlightIndex + 36) % 37], EUROPEAN_WHEEL[highlightIndex], EUROPEAN_WHEEL[(highlightIndex + 1) % 37]]);
   const coverage = calculateCoverage(allSpins);
+  const trendSector = detectTrendSector(allSpins);
   const selectedNotation = selectedSpin ? notationFor(selectedSpin.number) : null;
   const selectableMarks = new Set<BetMark>(selectedNotation ? [selectedNotation.sector as BetMark, selectedNotation.row as BetMark, selectedNotation.dozen as BetMark] : []);
   return <main className="mobile-app">
     <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={clearHistory} disabled={!spins.length || saving} aria-label="すべて削除">⋮</button></header>
     <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
-    <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={prediction.recommended === sector ? "forecast-top" : ""} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
+    <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={`${prediction.recommended === sector ? "forecast-top" : ""} ${trendSector === sector ? "forecast-trend" : ""}`} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
     <section className="coverage-strip" aria-label="2コラム2ダズン"><span>{coverage.columns.length ? coverage.columns.map((column) => COLUMN_NOTATION[column - 1]).join(" ") : "—"}</span><span>{coverage.dozens.length ? coverage.dozens.join(" ") : "—"}</span></section>
     {selectedSpin ? <section className="calculator marking-calculator" aria-label="的中マーク入力">
       <div className="calculator-top"><div className="number-display"><b>{selectedSpin.number}</b></div><button type="button" className="mark-done" onClick={() => { setSelectedSpinId(null); setArmedId(null); }} aria-label="マーク入力を閉じる">✓</button></div>

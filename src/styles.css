@@ -105,6 +105,7 @@ button:disabled { cursor: not-allowed; opacity: .34; }
 .forecast-strip i { font-size: 9px; font-style: normal; }
 .forecast-strip .forecast-top { color: #eadcff; background: var(--primary-soft); }
 .forecast-strip .forecast-top b { color: var(--primary); }
+.forecast-strip .forecast-trend { box-shadow: inset 0 0 0 1px rgba(255,198,92,.5); background-image: linear-gradient(rgba(255,198,92,.1), rgba(255,198,92,.1)); }
 
 .coverage-strip {
   min-height: 32px;
