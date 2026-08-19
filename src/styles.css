@@ -116,6 +116,7 @@ button:disabled { cursor: not-allowed; opacity: .34; }
   background: var(--surface);
 }
 .coverage-strip span { display: grid; place-items: center; color: var(--primary); background: var(--surface-2); border-radius: 14px; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.coverage-strip span.coverage-off { color: #68656d; background: #19191b; opacity: .58; box-shadow: inset 0 0 0 1px rgba(147,143,153,.08); }
 
 .calculator {
   padding: 12px 10px calc(10px + env(safe-area-inset-bottom, 0px));

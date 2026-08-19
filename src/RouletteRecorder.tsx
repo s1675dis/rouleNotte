@@ -13,7 +13,7 @@ type Prediction = {
   nextDirection: Direction | null;
   scores: Record<Sector, number>;
 };
-type CoverageRecommendation = { columns: number[]; dozens: number[] };
+type CoverageRecommendation = { columns: number[]; dozens: number[]; columnActive: boolean; dozenActive: boolean };
 
 const STORAGE_KEY = "memo-cache-v1";
 const BET_MARKS: BetMark[] = ["G", "O", "T", "A", "B", "C", "1", "2", "3"];
@@ -137,21 +137,34 @@ function calculatePrediction(allRows: Spin[]): Prediction {
 }
 
 function calculateCoverage(allRows: Spin[]): CoverageRecommendation {
-  if (!allRows.some((row) => row.number !== 0)) return { columns: [], dozens: [] };
+  if (!allRows.some((row) => row.number !== 0)) return { columns: [], dozens: [], columnActive: false, dozenActive: false };
   const numberScores = Array.from({ length: 37 }, () => 0);
-  allRows.slice(-160).reverse().forEach((row, distance) => {
+  const recentRows = allRows.slice(-160);
+  recentRows.reverse().forEach((row, distance) => {
     if (row.number !== 0) numberScores[row.number] += 1 + 2.5 * Math.exp(-distance / 24);
   });
   const hotNumbers = Array.from({ length: 36 }, (_, index) => index + 1).sort((a, b) => numberScores[b] - numberScores[a]).slice(0, 8);
-  const columnScores = [0, 0, 0];
-  const dozenScores = [0, 0, 0];
-  hotNumbers.forEach((number) => {
-    const score = numberScores[number];
-    columnScores[(number - 1) % 3] += score;
-    dozenScores[Math.floor((number - 1) / 12)] += score;
-  });
-  const topTwo = (scores: number[]) => [0, 1, 2].sort((a, b) => scores[b] - scores[a]).slice(0, 2).map((index) => index + 1);
-  return { columns: topTwo(columnScores), dozens: topTwo(dozenScores) };
+  const nonZeroSamples = recentRows.filter((row) => row.number !== 0).length;
+  const analyze = (groupOf: (number: number) => number) => {
+    const historyScores = [0, 0, 0];
+    const hotScores = [0, 0, 0];
+    const coldScores = [0, 0, 0];
+    for (let number = 1; number <= 36; number += 1) historyScores[groupOf(number)] += numberScores[number];
+    hotNumbers.forEach((number) => { hotScores[groupOf(number)] += numberScores[number]; });
+    const averageNumberScore = numberScores.slice(1).reduce((sum, score) => sum + score, 0) / 36;
+    for (let number = 1; number <= 36; number += 1) coldScores[groupOf(number)] += Math.max(0, averageNumberScore - numberScores[number]);
+    const normalize = (scores: number[]) => { const total = scores.reduce((sum, score) => sum + score, 0); return scores.map((score) => total ? score / total : 1 / 3); };
+    const historyShare = normalize(historyScores);
+    const hotShare = normalize(hotScores);
+    const coldShare = normalize(coldScores);
+    const antiColdShare = coldShare.map((share) => (1 - share) / 2);
+    const combined = historyShare.map((share, index) => share * .3 + hotShare[index] * .5 + antiColdShare[index] * .2);
+    const spread = Math.max(...combined) - Math.min(...combined);
+    return { choices: [0, 1, 2].sort((a, b) => combined[b] - combined[a]).slice(0, 2).map((index) => index + 1), active: nonZeroSamples >= 9 && spread >= .08 };
+  };
+  const columns = analyze((number) => (number - 1) % 3);
+  const dozens = analyze((number) => Math.floor((number - 1) / 12));
+  return { columns: columns.choices, dozens: dozens.choices, columnActive: columns.active, dozenActive: dozens.active };
 }
 
 function detectTrendSector(allRows: Spin[]): Sector | null {
@@ -289,7 +302,7 @@ export function RouletteRecorder() {
     <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={clearHistory} disabled={!spins.length || saving} aria-label="すべて削除">⋮</button></header>
     <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
     <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={`${prediction.recommended === sector ? "forecast-top" : ""} ${trendSector === sector ? "forecast-trend" : ""}`} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
-    <section className="coverage-strip" aria-label="2コラム2ダズン"><span>{coverage.columns.length ? coverage.columns.map((column) => COLUMN_NOTATION[column - 1]).join(" ") : "—"}</span><span>{coverage.dozens.length ? coverage.dozens.join(" ") : "—"}</span></section>
+    <section className="coverage-strip" aria-label="2コラム2ダズン"><span className={coverage.columnActive ? "" : "coverage-off"} aria-disabled={!coverage.columnActive}>{coverage.columns.length ? coverage.columns.map((column) => COLUMN_NOTATION[column - 1]).join(" ") : "—"}</span><span className={coverage.dozenActive ? "" : "coverage-off"} aria-disabled={!coverage.dozenActive}>{coverage.dozens.length ? coverage.dozens.join(" ") : "—"}</span></section>
     {selectedSpin ? <section className="calculator marking-calculator" aria-label="的中マーク入力">
       <div className="calculator-top"><div className="number-display"><b>{selectedSpin.number}</b></div><div className="rotation-buttons" aria-label="回転方向"><button type="button" disabled aria-label="左回り"><span>↺</span></button><button type="button" disabled aria-label="右回り"><span>↻</span></button></div></div>
       <div className="calculator-body"><div className="number-pad marking-pad">{BET_MARKS.map((mark) => <button type="button" key={mark} className={selectedSpin.marks.includes(mark) ? "active" : ""} disabled={!selectableMarks.has(mark)} aria-pressed={selectedSpin.marks.includes(mark)} onClick={() => toggleBetMark(mark)}>{mark}</button>)}<button type="button" className="key-muted" disabled>C</button><button type="button" className="key-muted" disabled>0</button><button type="button" className="key-muted" disabled aria-label="使用しません">⌫</button></div><button type="button" className="send-button" onClick={() => { setSelectedSpinId(null); setArmedId(null); }} aria-label="マーク入力を閉じる"><span>✓</span></button></div>
