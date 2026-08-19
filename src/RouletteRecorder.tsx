@@ -124,7 +124,7 @@ function RecordTile({ spin, armed, highlighted, onTap }: { spin: Spin; armed: bo
 
 export function RouletteRecorder() {
   const [allSpins, setAllSpins] = useState<Spin[]>([]), [prediction, setPrediction] = useState<Prediction>(() => calculatePrediction([]));
-  const [draft, setDraft] = useState(""), [chosenDirection, setChosenDirection] = useState<Direction | null>(null), [armedId, setArmedId] = useState<number | null>(null);
+  const [draft, setDraft] = useState(""), [chosenDirection, setChosenDirection] = useState<Direction | null>(null), [armedId, setArmedId] = useState<number | null>(null), [selectedNumber, setSelectedNumber] = useState<number | null>(null);
   const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [notice, setNotice] = useState("");
   const disarmTimer = useRef<number | null>(null);
   const applySpins = useCallback((next: Spin[], persist = true) => {
@@ -146,20 +146,34 @@ export function RouletteRecorder() {
     if (saving || draft === "") return; setSaving(true); const number = Number(draft); let direction = chosenDirection; const anchor = allSpins.findIndex((row) => row.direction !== null);
     if (anchor >= 0) { const base = allSpins[anchor].direction as Direction; const expected: Direction = Math.abs(allSpins.length - anchor) % 2 === 0 ? base : base === "right" ? "left" : "right"; if (chosenDirection && chosenDirection !== expected) { setNotice(`交互回転のため、この回は「${expected === "right" ? "右" : "左"}」です`); setSaving(false); return; } direction = expected; }
     const id = Math.max(Date.now(), (allSpins.at(-1)?.id ?? 0) + 1); let next = [...allSpins, { id, number, direction, createdAt: new Date().toISOString() }]; if (anchor < 0 && direction) next = normalizeDirections(next);
-    if (applySpins(next)) { setDraft(""); setChosenDirection(null); setNotice(`${number} を保存しました`); } setSaving(false);
+    if (applySpins(next)) { setDraft(""); setChosenDirection(null); setSelectedNumber(null); setNotice(`${number} を保存しました`); } setSaving(false);
   }, [allSpins, applySpins, chosenDirection, draft, saving]);
   useEffect(() => { const key = (event: KeyboardEvent) => { if (/^\d$/.test(event.key)) appendDigit(event.key); if (event.key === "Backspace") setDraft((v) => v.slice(0, -1)); if (event.key === "Escape") setDraft(""); if (event.key === "Enter") recordSpin(); }; addEventListener("keydown", key); return () => removeEventListener("keydown", key); }, [appendDigit, recordSpin]);
-  const deleteSpin = (id: number) => { if (!saving && applySpins(normalizeDirections(allSpins.filter((spin) => spin.id !== id)))) setNotice("削除しました"); };
-  const tapRecord = (id: number) => { if (armedId === id) { if (disarmTimer.current) clearTimeout(disarmTimer.current); setArmedId(null); deleteSpin(id); return; } setArmedId(id); setNotice("もう一度タップすると削除します"); if (disarmTimer.current) clearTimeout(disarmTimer.current); disarmTimer.current = window.setTimeout(() => setArmedId(null), 900); };
-  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) setNotice("すべて削除しました"); };
+  const deleteSpin = (id: number) => { if (!saving && applySpins(normalizeDirections(allSpins.filter((spin) => spin.id !== id)))) { setSelectedNumber(null); setNotice("削除しました"); } };
+  const tapRecord = (spin: Spin) => {
+    if (armedId === spin.id) {
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+      setArmedId(null);
+      deleteSpin(spin.id);
+      return;
+    }
+    const latestNumber = allSpins.at(-1)?.number;
+    setSelectedNumber((current) => current === spin.number || spin.number === latestNumber ? null : spin.number);
+    setArmedId(spin.id);
+    setNotice("もう一度タップすると削除します");
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    disarmTimer.current = window.setTimeout(() => setArmedId(null), 900);
+  };
+  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) { setSelectedNumber(null); setNotice("すべて削除しました"); } };
   const spins = allSpins.slice(-500), hiddenCount = Math.max(0, allSpins.length - 500), displayedDirection = chosenDirection ?? prediction.nextDirection;
   const latestNumber = allSpins.at(-1)?.number;
-  const latestIndex = latestNumber === undefined ? -1 : WHEEL_INDEX.get(latestNumber) ?? -1;
-  const highlightedNumbers = latestIndex < 0 ? new Set<number>() : new Set<number>([EUROPEAN_WHEEL[(latestIndex + 36) % 37], EUROPEAN_WHEEL[latestIndex], EUROPEAN_WHEEL[(latestIndex + 1) % 37]]);
+  const highlightAnchor = selectedNumber ?? latestNumber;
+  const highlightIndex = highlightAnchor === undefined ? -1 : WHEEL_INDEX.get(highlightAnchor) ?? -1;
+  const highlightedNumbers = highlightIndex < 0 ? new Set<number>() : new Set<number>([EUROPEAN_WHEEL[(highlightIndex + 36) % 37], EUROPEAN_WHEEL[highlightIndex], EUROPEAN_WHEEL[(highlightIndex + 1) % 37]]);
   const coverage = calculateCoverage(allSpins);
   return <main className="mobile-app">
     <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={clearHistory} disabled={!spins.length || saving} aria-label="すべて削除">⋮</button></header>
-    <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin.id)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
+    <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
     <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={prediction.recommended === sector ? "forecast-top" : ""} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
     <section className="coverage-strip" aria-label="2コラム2ダズン"><span>{coverage.columns.length ? coverage.columns.map((column) => `C${column}`).join(" ") : "C—"}</span><span>{coverage.dozens.length ? coverage.dozens.map((dozen) => `D${dozen}`).join(" ") : "D—"}</span></section>
     <section className="calculator" aria-label="入力"><div className="calculator-top"><div className="number-display"><b>{draft || "—"}</b></div><div className="rotation-buttons" aria-label="回転方向"><button type="button" className={displayedDirection === "left" ? "active" : ""} onClick={() => setChosenDirection("left")} aria-pressed={displayedDirection === "left"} aria-label="左回り"><span>↺</span></button><button type="button" className={displayedDirection === "right" ? "active" : ""} onClick={() => setChosenDirection("right")} aria-pressed={displayedDirection === "right"} aria-label="右回り"><span>↻</span></button></div></div><div className="calculator-body"><div className="number-pad">{[1,2,3,4,5,6,7,8,9].map((digit) => <button type="button" key={digit} onClick={() => appendDigit(String(digit))}>{digit}</button>)}<button type="button" className="key-muted" onClick={() => setDraft("")}>C</button><button type="button" onClick={() => appendDigit("0")}>0</button><button type="button" className="key-muted" onClick={() => setDraft((v) => v.slice(0,-1))} aria-label="1文字消す">⌫</button></div><button type="button" className="send-button" onClick={recordSpin} disabled={draft === "" || saving}><span>{saving ? "…" : "✓"}</span></button></div></section>
