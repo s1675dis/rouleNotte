@@ -139,8 +139,6 @@ button:disabled { cursor: not-allowed; opacity: .34; }
 .send-button { display: grid; place-items: center; color: #241a3a; background: var(--primary); border: 0; border-radius: 24px; box-shadow: 0 2px 7px rgba(0,0,0,.4); }
 .send-button span { font-size: 25px; font-weight: 500; }
 .send-button:active:not(:disabled) { transform: scale(.97); }
-.mark-done { color: #241a3a; background: var(--primary); border: 0; border-radius: 18px; font-size: 22px; }
-.marking-pad { height: clamp(210px, 27dvh, 255px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 7px; }
 .marking-pad button { color: var(--muted); background: var(--surface-3); border: 0; border-radius: 20px; font-size: 18px; font-weight: 700; }
 .marking-pad button:not(:disabled):active { transform: scale(.95); }
 .marking-pad button.active { color: #2c1d00; background: #ffc65c; box-shadow: 0 0 9px rgba(255,165,45,.35); }
@@ -161,13 +159,11 @@ button:disabled { cursor: not-allowed; opacity: .34; }
   .calculator { padding-top: 8px; }
   .calculator-top { height: 44px; }
   .calculator-body { height: 202px; }
-  .marking-pad { height: 202px; }
   .records-grid { grid-auto-rows: 48px; }
 }
 
 @media (max-height: 590px) {
   .calculator-body { height: 176px; }
-  .marking-pad { height: 176px; }
   .calculator-top { height: 40px; }
   .number-display b { font-size: 23px; }
   .forecast-strip { min-height: 38px; }
