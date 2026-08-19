@@ -6,7 +6,8 @@ type Direction = "right" | "left";
 type Sector = "G" | "O" | "T";
 type WheelSector = "Z" | Sector;
 type BetMark = Sector | "A" | "B" | "C" | "1" | "2" | "3";
-type Spin = { id: number; number: number; direction: Direction | null; createdAt: string; marks: BetMark[] };
+type ForecastSnapshot = { recommended: Sector; scores: Record<Sector, number> };
+type Spin = { id: number; number: number; direction: Direction | null; createdAt: string; marks: BetMark[]; forecast: ForecastSnapshot | null; predictionHit: boolean | null };
 type Prediction = {
   recommended: Sector | null;
   nextDirection: Direction | null;
@@ -38,6 +39,11 @@ function wheelSectorOf(number: number): WheelSector { return (Object.keys(SECTOR
 function sectorOf(number: number): Sector { const sector = wheelSectorOf(number); return sector === "Z" ? "G" : sector; }
 function emptyCounts(): Record<Sector, number> { return { G: 0, O: 0, T: 0 }; }
 function isBetMark(value: unknown): value is BetMark { return typeof value === "string" && BET_MARKS.includes(value as BetMark); }
+function isForecastSnapshot(value: unknown): value is ForecastSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const forecast = value as Partial<ForecastSnapshot>;
+  return SECTOR_KEYS.includes(forecast.recommended as Sector) && !!forecast.scores && SECTOR_KEYS.every((sector) => Number.isFinite(forecast.scores?.[sector]));
+}
 function wheelStep(from: number, to: number, direction: Direction) {
   const start = WHEEL_INDEX.get(from) ?? 0;
   const end = WHEEL_INDEX.get(to) ?? 0;
@@ -53,7 +59,7 @@ function wheelDistance(a: number, b: number) {
   return Math.min(difference, 37 - difference);
 }
 
-function calculatePrediction(allRows: Spin[]): Prediction {
+function calculateBasePrediction(allRows: Spin[]): Prediction {
   const rows = allRows.slice(-5000);
   const latest = rows.at(-1);
   const nextDirection: Direction | null = latest?.direction ? latest.direction === "right" ? "left" : "right" : null;
@@ -83,10 +89,51 @@ function calculatePrediction(allRows: Spin[]): Prediction {
   const distribution = Object.fromEntries(SECTOR_KEYS.map((sector) => [sector, (projected[sector] + NATURAL_PRIOR[sector] * smoothing) / total])) as Record<Sector, number>;
   const sorted = [...SECTOR_KEYS].sort((a, b) => distribution[b] - distribution[a]);
   return {
-    recommended: sampleWeight > 0 ? sorted[0] : null,
+    recommended: sorted[0],
     nextDirection,
     scores: Object.fromEntries(SECTOR_KEYS.map((sector) => [sector, Math.round(distribution[sector] * 1000) / 10])) as Record<Sector, number>,
   };
+}
+
+function calculatePrediction(allRows: Spin[]): Prediction {
+  const base = calculateBasePrediction(allRows);
+  const evaluated = allRows.filter((row) => row.forecast).slice(-240);
+  if (!evaluated.length) return base;
+
+  const actual = emptyCounts();
+  const predicted = emptyCounts();
+  const conditional = emptyCounts();
+  let conditionalWeight = 0;
+  evaluated.forEach((row, index) => {
+    const weight = Math.exp(-(evaluated.length - 1 - index) / 80);
+    const actualSector = sectorOf(row.number);
+    actual[actualSector] += weight;
+    SECTOR_KEYS.forEach((sector) => { predicted[sector] += weight * (row.forecast?.scores[sector] ?? 0) / 100; });
+    if (row.forecast?.recommended === base.recommended) {
+      conditional[actualSector] += weight;
+      conditionalWeight += weight;
+    }
+  });
+
+  const calibrationStrength = 3;
+  const corrected = Object.fromEntries(SECTOR_KEYS.map((sector) => {
+    const observedShare = (actual[sector] + NATURAL_PRIOR[sector] * calibrationStrength) / (evaluated.reduce((sum, _, index) => sum + Math.exp(-(evaluated.length - 1 - index) / 80), 0) + calibrationStrength);
+    const predictedShare = (predicted[sector] + NATURAL_PRIOR[sector] * calibrationStrength) / (SECTOR_KEYS.reduce((sum, key) => sum + predicted[key], 0) + calibrationStrength);
+    const correctionFactor = Math.min(2.2, Math.max(.45, observedShare / predictedShare));
+    return [sector, (base.scores[sector] / 100) * correctionFactor];
+  })) as Record<Sector, number>;
+
+  if (conditionalWeight >= 4 && base.recommended) {
+    SECTOR_KEYS.forEach((sector) => {
+      const conditionalShare = (conditional[sector] + NATURAL_PRIOR[sector] * 2) / (conditionalWeight + 2);
+      corrected[sector] = corrected[sector] * .65 + conditionalShare * .35;
+    });
+  }
+
+  const total = SECTOR_KEYS.reduce((sum, sector) => sum + corrected[sector], 0);
+  const scores = Object.fromEntries(SECTOR_KEYS.map((sector) => [sector, Math.round(corrected[sector] / total * 1000) / 10])) as Record<Sector, number>;
+  const recommended = [...SECTOR_KEYS].sort((a, b) => scores[b] - scores[a])[0];
+  return { recommended, nextDirection: base.nextDirection, scores };
 }
 
 function calculateCoverage(allRows: Spin[]): CoverageRecommendation {
@@ -139,14 +186,27 @@ function normalizeDirections(rows: Spin[]) {
   const base = rows[anchor].direction as Direction;
   return rows.map((row, index) => ({ ...row, direction: Math.abs(index - anchor) % 2 === 0 ? base : base === "right" ? "left" : "right" }));
 }
+function backfillForecasts(rows: Spin[]) {
+  const upgraded = [...rows];
+  const start = Math.max(0, upgraded.length - 240);
+  for (let index = start; index < upgraded.length; index += 1) {
+    const forecast = upgraded[index].forecast ?? (() => {
+      const prediction = calculateBasePrediction(upgraded.slice(0, index));
+      return { recommended: prediction.recommended as Sector, scores: prediction.scores };
+    })();
+    upgraded[index] = { ...upgraded[index], forecast, predictionHit: forecast.recommended === sectorOf(upgraded[index].number) };
+  }
+  return upgraded;
+}
 function readCache(): Spin[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is Omit<Spin, "marks"> & { marks?: unknown } => { const s = item as Partial<Spin>; return !!item && typeof item === "object" && typeof s.id === "number" && Number.isInteger(s.number) && Number(s.number) >= 0 && Number(s.number) <= 36 && (s.direction === null || s.direction === "right" || s.direction === "left") && typeof s.createdAt === "string"; })
-      .map((spin) => ({ ...spin, marks: Array.isArray(spin.marks) ? spin.marks.filter(isBetMark) : [] }))
+    const rows = parsed
+      .filter((item): item is Omit<Spin, "marks" | "forecast" | "predictionHit"> & { marks?: unknown; forecast?: unknown; predictionHit?: unknown } => { const s = item as Partial<Spin>; return !!item && typeof item === "object" && typeof s.id === "number" && Number.isInteger(s.number) && Number(s.number) >= 0 && Number(s.number) <= 36 && (s.direction === null || s.direction === "right" || s.direction === "left") && typeof s.createdAt === "string"; })
+      .map((spin) => ({ ...spin, marks: Array.isArray(spin.marks) ? spin.marks.filter(isBetMark) : [], forecast: isForecastSnapshot(spin.forecast) ? spin.forecast : null, predictionHit: null }))
       .sort((a, b) => a.id - b.id);
+    return backfillForecasts(rows);
   } catch { return []; }
 }
 
@@ -182,9 +242,10 @@ export function RouletteRecorder() {
   const recordSpin = useCallback(() => {
     if (saving || draft === "") return; setSaving(true); const number = Number(draft); let direction = chosenDirection; const anchor = allSpins.findIndex((row) => row.direction !== null);
     if (anchor >= 0) { const base = allSpins[anchor].direction as Direction; const expected: Direction = Math.abs(allSpins.length - anchor) % 2 === 0 ? base : base === "right" ? "left" : "right"; if (chosenDirection && chosenDirection !== expected) { setNotice(`交互回転のため、この回は「${expected === "right" ? "右" : "左"}」です`); setSaving(false); return; } direction = expected; }
-    const id = Math.max(Date.now(), (allSpins.at(-1)?.id ?? 0) + 1); let next = [...allSpins, { id, number, direction, createdAt: new Date().toISOString(), marks: [] }]; if (anchor < 0 && direction) next = normalizeDirections(next);
+    const forecast: ForecastSnapshot = { recommended: prediction.recommended ?? "G", scores: prediction.scores };
+    const id = Math.max(Date.now(), (allSpins.at(-1)?.id ?? 0) + 1); let next = [...allSpins, { id, number, direction, createdAt: new Date().toISOString(), marks: [], forecast, predictionHit: forecast.recommended === sectorOf(number) }]; if (anchor < 0 && direction) next = normalizeDirections(next);
     if (applySpins(next)) { setDraft(""); setChosenDirection(null); setSelectedSpinId(null); setNotice(`${number} を保存しました`); } setSaving(false);
-  }, [allSpins, applySpins, chosenDirection, draft, saving]);
+  }, [allSpins, applySpins, chosenDirection, draft, prediction, saving]);
   useEffect(() => { const key = (event: KeyboardEvent) => { if (selectedSpinId !== null) { if (event.key === "Escape") { setSelectedSpinId(null); setArmedId(null); } return; } if (/^\d$/.test(event.key)) appendDigit(event.key); if (event.key === "Backspace") setDraft((v) => v.slice(0, -1)); if (event.key === "Escape") setDraft(""); if (event.key === "Enter") recordSpin(); }; addEventListener("keydown", key); return () => removeEventListener("keydown", key); }, [appendDigit, recordSpin, selectedSpinId]);
   const deleteSpin = (id: number) => { if (!saving && applySpins(normalizeDirections(allSpins.filter((spin) => spin.id !== id)))) { setSelectedSpinId(null); setNotice("削除しました"); } };
   const tapRecord = (spin: Spin) => {
