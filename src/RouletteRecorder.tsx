@@ -253,7 +253,7 @@ export function RouletteRecorder() {
   const [allSpins, setAllSpins] = useState<Spin[]>([]), [prediction, setPrediction] = useState<Prediction>(() => calculatePrediction([]));
   const [draft, setDraft] = useState(""), [chosenDirection, setChosenDirection] = useState<Direction | null>(null), [armedId, setArmedId] = useState<number | null>(null), [selectedSpinId, setSelectedSpinId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [notice, setNotice] = useState("");
-  const [environment, setEnvironment] = useState<EnvironmentNumbers>({ hot: [], cold: [] }), [settingsOpen, setSettingsOpen] = useState(false), [environmentMode, setEnvironmentMode] = useState<"hot" | "cold">("hot"), [environmentDraft, setEnvironmentDraft] = useState("");
+  const [environment, setEnvironment] = useState<EnvironmentNumbers>({ hot: [], cold: [] }), [settingsOpen, setSettingsOpen] = useState(false), [menuOpen, setMenuOpen] = useState(false), [environmentMode, setEnvironmentMode] = useState<"hot" | "cold">("hot"), [environmentDraft, setEnvironmentDraft] = useState("");
   const disarmTimer = useRef<number | null>(null);
   const applySpins = useCallback((next: Spin[], persist = true) => {
     const ordered = [...next].sort((a, b) => a.id - b.id);
@@ -304,7 +304,7 @@ export function RouletteRecorder() {
     if (disarmTimer.current) clearTimeout(disarmTimer.current);
     disarmTimer.current = window.setTimeout(() => setArmedId(null), 900);
   };
-  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) { setSelectedSpinId(null); setNotice("すべて削除しました"); } };
+  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) { setSelectedSpinId(null); setMenuOpen(false); setNotice("すべて削除しました"); } };
   const persistEnvironment = (next: EnvironmentNumbers) => {
     try { localStorage.setItem(ENVIRONMENT_KEY, JSON.stringify(next)); setEnvironment(next); return true; }
     catch { setNotice("端末の保存容量を確認してください"); return false; }
@@ -342,7 +342,7 @@ export function RouletteRecorder() {
   const selectedNotation = selectedSpin ? notationFor(selectedSpin.number) : null;
   const selectableMarks = new Set<BetMark>(selectedNotation ? [selectedNotation.sector as BetMark, selectedNotation.row as BetMark, selectedNotation.dozen as BetMark] : []);
   return <main className="mobile-app">
-    <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={() => { setEnvironmentDraft(""); setSettingsOpen(true); }} aria-label="設定">⋮</button></header>
+    <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="メニュー" aria-expanded={menuOpen}>⋮</button>{menuOpen && <div className="overflow-menu"><button type="button" onClick={() => { setMenuOpen(false); setEnvironmentDraft(""); setSettingsOpen(true); }}>初期設定</button><button type="button" onClick={clearHistory} disabled={!allSpins.length || saving}>すべて削除</button></div>}</header>
     <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
     <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={`${prediction.recommended === sector ? "forecast-top" : ""} ${trendSector === sector ? "forecast-trend" : ""}`} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
     <section className="coverage-strip" aria-label="2コラム2ダズン"><span className={coverage.columnActive ? "" : "coverage-off"} aria-disabled={!coverage.columnActive}>{coverage.columns.length ? coverage.columns.map((column) => COLUMN_NOTATION[column - 1]).join(" ") : "—"}</span><span className={coverage.dozenActive ? "" : "coverage-off"} aria-disabled={!coverage.dozenActive}>{coverage.dozens.length ? coverage.dozens.join(" ") : "—"}</span></section>
@@ -355,7 +355,7 @@ export function RouletteRecorder() {
       <div className="environment-lists"><div><b>H</b><span>{environment.hot.length ? environment.hot.map((number) => <button type="button" key={number} onClick={() => removeEnvironmentNumber("hot", number)}>{number}</button>) : "—"}</span></div><div><b>C</b><span>{environment.cold.length ? environment.cold.map((number) => <button type="button" key={number} onClick={() => removeEnvironmentNumber("cold", number)}>{number}</button>) : "—"}</span></div></div>
       <div className="environment-entry"><div className="number-display"><b>{environmentDraft || "—"}</b></div><button type="button" onClick={toggleEnvironmentNumber} disabled={environmentDraft === ""}>＋</button></div>
       <div className="environment-pad">{[1,2,3,4,5,6,7,8,9].map((digit) => <button type="button" key={digit} onClick={() => appendEnvironmentDigit(String(digit))}>{digit}</button>)}<button type="button" className="key-muted" onClick={() => setEnvironmentDraft("")}>C</button><button type="button" onClick={() => appendEnvironmentDigit("0")}>0</button><button type="button" className="key-muted" onClick={() => setEnvironmentDraft((value) => value.slice(0, -1))} aria-label="1文字消す">⌫</button></div>
-      <div className="environment-actions"><button type="button" onClick={clearHistory} disabled={!allSpins.length} aria-label="履歴を削除">⌫</button><button type="button" className="done" onClick={() => setSettingsOpen(false)} aria-label="設定を閉じる">✓</button></div>
+      <div className="environment-actions"><button type="button" className="done" onClick={() => setSettingsOpen(false)} aria-label="設定を閉じる">✓</button></div>
     </section></div>}
     {notice && <div className="toast" role="status">{notice}</div>}
   </main>;
