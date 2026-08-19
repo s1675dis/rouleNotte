@@ -76,6 +76,8 @@ button:disabled { cursor: not-allowed; opacity: .34; }
 .tile-number, .tile-code { font-size: 12px; font-weight: 500; line-height: 1; }
 .tile-number.red { color: var(--red); }.tile-number.black { color: var(--text); }
 .tile-code.sector { color: var(--primary); }
+.tile-code.sector.zero-as-grand { color: var(--green); }
+.tile-code.bet-hit { color: #ffc65c !important; font-weight: 800; text-shadow: 0 0 7px rgba(255,165,45,.7); }
 .tile-direction { position: absolute; z-index: 2; top: 4px; right: 5px; color: var(--muted); font-size: 9px; font-weight: 700; line-height: 1; }
 .tile-direction.right { color: #9d4a45; }.tile-direction.left { color: #47666e; }
 .record-tile.is-zero { grid-template-rows: 1fr; }
@@ -93,7 +95,7 @@ button:disabled { cursor: not-allowed; opacity: .34; }
   min-height: 48px;
   padding: 7px 12px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   align-items: stretch;
   gap: 6px;
   background: var(--surface);
@@ -136,6 +138,11 @@ button:disabled { cursor: not-allowed; opacity: .34; }
 .send-button { display: grid; place-items: center; color: #241a3a; background: var(--primary); border: 0; border-radius: 24px; box-shadow: 0 2px 7px rgba(0,0,0,.4); }
 .send-button span { font-size: 25px; font-weight: 500; }
 .send-button:active:not(:disabled) { transform: scale(.97); }
+.mark-done { color: #241a3a; background: var(--primary); border: 0; border-radius: 18px; font-size: 22px; }
+.marking-pad { height: clamp(210px, 27dvh, 255px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 7px; }
+.marking-pad button { color: var(--muted); background: var(--surface-3); border: 0; border-radius: 20px; font-size: 18px; font-weight: 700; }
+.marking-pad button:not(:disabled):active { transform: scale(.95); }
+.marking-pad button.active { color: #2c1d00; background: #ffc65c; box-shadow: 0 0 9px rgba(255,165,45,.35); }
 
 .toast { position: fixed; z-index: 20; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100vw - 28px); padding: 10px 16px; color: #201f22; background: #e6e1e5; border-radius: 5px; box-shadow: 0 3px 12px rgba(0,0,0,.45); font-size: 10px; white-space: nowrap; }
 
@@ -153,11 +160,13 @@ button:disabled { cursor: not-allowed; opacity: .34; }
   .calculator { padding-top: 8px; }
   .calculator-top { height: 44px; }
   .calculator-body { height: 202px; }
+  .marking-pad { height: 202px; }
   .records-grid { grid-auto-rows: 48px; }
 }
 
 @media (max-height: 590px) {
   .calculator-body { height: 176px; }
+  .marking-pad { height: 176px; }
   .calculator-top { height: 40px; }
   .number-display b { font-size: 23px; }
   .forecast-strip { min-height: 38px; }

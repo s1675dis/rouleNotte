@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Direction = "right" | "left";
-type Sector = "Z" | "G" | "O" | "T";
-type Spin = { id: number; number: number; direction: Direction | null; createdAt: string };
+type Sector = "G" | "O" | "T";
+type WheelSector = "Z" | Sector;
+type BetMark = Sector | "A" | "B" | "C" | "1" | "2" | "3";
+type Spin = { id: number; number: number; direction: Direction | null; createdAt: string; marks: BetMark[] };
 type Prediction = {
   recommended: Sector | null;
   nextDirection: Direction | null;
@@ -13,25 +15,29 @@ type Prediction = {
 type CoverageRecommendation = { columns: number[]; dozens: number[] };
 
 const STORAGE_KEY = "memo-cache-v1";
+const BET_MARKS: BetMark[] = ["G", "O", "T", "A", "B", "C", "1", "2", "3"];
 const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
 const SECTORS = {
   Z: new Set([0, 3, 12, 15, 26, 32, 35]), G: new Set([2, 4, 7, 18, 19, 21, 22, 25, 28, 29]),
   O: new Set([1, 6, 9, 14, 17, 20, 31, 34]), T: new Set([5, 8, 10, 11, 13, 16, 23, 24, 27, 30, 33, 36]),
 } as const;
-const SECTOR_KEYS: Sector[] = ["Z", "G", "O", "T"];
+const SECTOR_KEYS: Sector[] = ["G", "O", "T"];
 const COLUMN_NOTATION = ["C", "B", "A"] as const;
-const NATURAL_PRIOR: Record<Sector, number> = { Z: 7 / 37, G: 10 / 37, O: 8 / 37, T: 12 / 37 };
+const NATURAL_PRIOR: Record<Sector, number> = { G: 17 / 37, O: 8 / 37, T: 12 / 37 };
 const EUROPEAN_WHEEL: readonly number[] = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
 const WHEEL_INDEX = new Map<number, number>(EUROPEAN_WHEEL.map((number, index) => [number, index]));
 
 function notationFor(number: number) {
   if (number === 0) return null;
   const remainder = number % 3;
-  return { row: remainder === 0 ? "A" : remainder === 2 ? "B" : "C", dozen: Math.ceil(number / 12).toString(), sector: SECTOR_KEYS.find((sector) => SECTORS[sector].has(number)) ?? "" };
+  const wheelSector = wheelSectorOf(number);
+  return { row: remainder === 0 ? "A" : remainder === 2 ? "B" : "C", dozen: Math.ceil(number / 12).toString(), sector: wheelSector === "Z" ? "G" : wheelSector, wheelSector };
 }
 function numberColor(number: number) { return number === 0 ? "green" : RED_NUMBERS.has(number) ? "red" : "black"; }
-function sectorOf(number: number): Sector { return SECTOR_KEYS.find((sector) => SECTORS[sector].has(number)) ?? "T"; }
-function emptyCounts(): Record<Sector, number> { return { Z: 0, G: 0, O: 0, T: 0 }; }
+function wheelSectorOf(number: number): WheelSector { return (Object.keys(SECTORS) as WheelSector[]).find((sector) => SECTORS[sector].has(number)) ?? "T"; }
+function sectorOf(number: number): Sector { const sector = wheelSectorOf(number); return sector === "Z" ? "G" : sector; }
+function emptyCounts(): Record<Sector, number> { return { G: 0, O: 0, T: 0 }; }
+function isBetMark(value: unknown): value is BetMark { return typeof value === "string" && BET_MARKS.includes(value as BetMark); }
 function wheelStep(from: number, to: number, direction: Direction) {
   const start = WHEEL_INDEX.get(from) ?? 0;
   const end = WHEEL_INDEX.get(to) ?? 0;
@@ -110,7 +116,10 @@ function readCache(): Spin[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is Spin => { const s = item as Partial<Spin>; return !!item && typeof item === "object" && typeof s.id === "number" && Number.isInteger(s.number) && Number(s.number) >= 0 && Number(s.number) <= 36 && (s.direction === null || s.direction === "right" || s.direction === "left") && typeof s.createdAt === "string"; }).sort((a, b) => a.id - b.id);
+    return parsed
+      .filter((item): item is Omit<Spin, "marks"> & { marks?: unknown } => { const s = item as Partial<Spin>; return !!item && typeof item === "object" && typeof s.id === "number" && Number.isInteger(s.number) && Number(s.number) >= 0 && Number(s.number) <= 36 && (s.direction === null || s.direction === "right" || s.direction === "left") && typeof s.createdAt === "string"; })
+      .map((spin) => ({ ...spin, marks: Array.isArray(spin.marks) ? spin.marks.filter(isBetMark) : [] }))
+      .sort((a, b) => a.id - b.id);
   } catch { return []; }
 }
 
@@ -118,14 +127,14 @@ function RecordTile({ spin, armed, highlighted, onTap }: { spin: Spin; armed: bo
   const notation = notationFor(spin.number);
   return <button type="button" className={`record-tile ${armed ? "armed" : ""} ${highlighted ? "wheel-highlight" : ""} ${spin.number === 0 ? "is-zero" : ""}`} onClick={onTap} aria-label={`${spin.number}の記録。2回タップで削除`}>
     {spin.direction && <span className={`tile-direction ${spin.direction}`}>{spin.direction === "right" ? "↻" : "↺"}</span>}
-    {spin.number === 0 ? <span className="tile-zero">0</span> : <><span className={`tile-number ${numberColor(spin.number)}`}>{spin.number}</span><span className="tile-code">{notation?.row}</span><span className="tile-code">{notation?.dozen}</span><span className="tile-code sector">{notation?.sector}</span></>}
+    {spin.number === 0 ? <span className="tile-zero">0</span> : <><span className={`tile-number ${numberColor(spin.number)}`}>{spin.number}</span><span className={`tile-code ${notation && spin.marks.includes(notation.row as BetMark) ? "bet-hit" : ""}`}>{notation?.row}</span><span className={`tile-code ${notation && spin.marks.includes(notation.dozen as BetMark) ? "bet-hit" : ""}`}>{notation?.dozen}</span><span className={`tile-code sector ${notation?.wheelSector === "Z" ? "zero-as-grand" : ""} ${notation && spin.marks.includes(notation.sector as BetMark) ? "bet-hit" : ""}`}>{notation?.sector}</span></>}
     {armed && <span className="delete-hint">もう一度</span>}
   </button>;
 }
 
 export function RouletteRecorder() {
   const [allSpins, setAllSpins] = useState<Spin[]>([]), [prediction, setPrediction] = useState<Prediction>(() => calculatePrediction([]));
-  const [draft, setDraft] = useState(""), [chosenDirection, setChosenDirection] = useState<Direction | null>(null), [armedId, setArmedId] = useState<number | null>(null), [selectedNumber, setSelectedNumber] = useState<number | null>(null);
+  const [draft, setDraft] = useState(""), [chosenDirection, setChosenDirection] = useState<Direction | null>(null), [armedId, setArmedId] = useState<number | null>(null), [selectedSpinId, setSelectedSpinId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [notice, setNotice] = useState("");
   const disarmTimer = useRef<number | null>(null);
   const applySpins = useCallback((next: Spin[], persist = true) => {
@@ -146,11 +155,11 @@ export function RouletteRecorder() {
   const recordSpin = useCallback(() => {
     if (saving || draft === "") return; setSaving(true); const number = Number(draft); let direction = chosenDirection; const anchor = allSpins.findIndex((row) => row.direction !== null);
     if (anchor >= 0) { const base = allSpins[anchor].direction as Direction; const expected: Direction = Math.abs(allSpins.length - anchor) % 2 === 0 ? base : base === "right" ? "left" : "right"; if (chosenDirection && chosenDirection !== expected) { setNotice(`交互回転のため、この回は「${expected === "right" ? "右" : "左"}」です`); setSaving(false); return; } direction = expected; }
-    const id = Math.max(Date.now(), (allSpins.at(-1)?.id ?? 0) + 1); let next = [...allSpins, { id, number, direction, createdAt: new Date().toISOString() }]; if (anchor < 0 && direction) next = normalizeDirections(next);
-    if (applySpins(next)) { setDraft(""); setChosenDirection(null); setSelectedNumber(null); setNotice(`${number} を保存しました`); } setSaving(false);
+    const id = Math.max(Date.now(), (allSpins.at(-1)?.id ?? 0) + 1); let next = [...allSpins, { id, number, direction, createdAt: new Date().toISOString(), marks: [] }]; if (anchor < 0 && direction) next = normalizeDirections(next);
+    if (applySpins(next)) { setDraft(""); setChosenDirection(null); setSelectedSpinId(null); setNotice(`${number} を保存しました`); } setSaving(false);
   }, [allSpins, applySpins, chosenDirection, draft, saving]);
-  useEffect(() => { const key = (event: KeyboardEvent) => { if (/^\d$/.test(event.key)) appendDigit(event.key); if (event.key === "Backspace") setDraft((v) => v.slice(0, -1)); if (event.key === "Escape") setDraft(""); if (event.key === "Enter") recordSpin(); }; addEventListener("keydown", key); return () => removeEventListener("keydown", key); }, [appendDigit, recordSpin]);
-  const deleteSpin = (id: number) => { if (!saving && applySpins(normalizeDirections(allSpins.filter((spin) => spin.id !== id)))) { setSelectedNumber(null); setNotice("削除しました"); } };
+  useEffect(() => { const key = (event: KeyboardEvent) => { if (selectedSpinId !== null) { if (event.key === "Escape") { setSelectedSpinId(null); setArmedId(null); } return; } if (/^\d$/.test(event.key)) appendDigit(event.key); if (event.key === "Backspace") setDraft((v) => v.slice(0, -1)); if (event.key === "Escape") setDraft(""); if (event.key === "Enter") recordSpin(); }; addEventListener("keydown", key); return () => removeEventListener("keydown", key); }, [appendDigit, recordSpin, selectedSpinId]);
+  const deleteSpin = (id: number) => { if (!saving && applySpins(normalizeDirections(allSpins.filter((spin) => spin.id !== id)))) { setSelectedSpinId(null); setNotice("削除しました"); } };
   const tapRecord = (spin: Spin) => {
     if (armedId === spin.id) {
       if (disarmTimer.current) clearTimeout(disarmTimer.current);
@@ -158,26 +167,44 @@ export function RouletteRecorder() {
       deleteSpin(spin.id);
       return;
     }
-    const latestNumber = allSpins.at(-1)?.number;
-    setSelectedNumber((current) => current === spin.number || spin.number === latestNumber ? null : spin.number);
+    if (selectedSpinId === spin.id) {
+      setSelectedSpinId(null);
+      setArmedId(null);
+      return;
+    }
+    setSelectedSpinId(spin.id);
     setArmedId(spin.id);
     setNotice("もう一度タップすると削除します");
     if (disarmTimer.current) clearTimeout(disarmTimer.current);
     disarmTimer.current = window.setTimeout(() => setArmedId(null), 900);
   };
-  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) { setSelectedNumber(null); setNotice("すべて削除しました"); } };
+  const clearHistory = () => { if (allSpins.length && !saving && confirm("すべてのメモを削除しますか？") && applySpins([], false)) { setSelectedSpinId(null); setNotice("すべて削除しました"); } };
+  const selectedSpin = allSpins.find((spin) => spin.id === selectedSpinId) ?? null;
+  const toggleBetMark = (mark: BetMark) => {
+    if (!selectedSpin) return;
+    const notation = notationFor(selectedSpin.number);
+    const matchingMarks: BetMark[] = notation ? [notation.sector as BetMark, notation.row as BetMark, notation.dozen as BetMark] : [];
+    if (!matchingMarks.includes(mark)) return;
+    const next = allSpins.map((spin) => spin.id === selectedSpin.id ? { ...spin, marks: spin.marks.includes(mark) ? spin.marks.filter((item) => item !== mark) : [...spin.marks, mark] } : spin);
+    if (applySpins(next)) setNotice(selectedSpin.marks.includes(mark) ? "マークを解除しました" : "マークしました");
+  };
   const spins = allSpins.slice(-500), hiddenCount = Math.max(0, allSpins.length - 500), displayedDirection = chosenDirection ?? prediction.nextDirection;
   const latestNumber = allSpins.at(-1)?.number;
-  const highlightAnchor = selectedNumber ?? latestNumber;
+  const highlightAnchor = selectedSpin?.number ?? latestNumber;
   const highlightIndex = highlightAnchor === undefined ? -1 : WHEEL_INDEX.get(highlightAnchor) ?? -1;
   const highlightedNumbers = highlightIndex < 0 ? new Set<number>() : new Set<number>([EUROPEAN_WHEEL[(highlightIndex + 36) % 37], EUROPEAN_WHEEL[highlightIndex], EUROPEAN_WHEEL[(highlightIndex + 1) % 37]]);
   const coverage = calculateCoverage(allSpins);
+  const selectedNotation = selectedSpin ? notationFor(selectedSpin.number) : null;
+  const selectableMarks = new Set<BetMark>(selectedNotation ? [selectedNotation.sector as BetMark, selectedNotation.row as BetMark, selectedNotation.dozen as BetMark] : []);
   return <main className="mobile-app">
     <header className="memo-toolbar"><span aria-hidden="true" /><button type="button" onClick={clearHistory} disabled={!spins.length || saving} aria-label="すべて削除">⋮</button></header>
     <section className="records-panel" aria-labelledby="records-title"><h1 id="records-title" className="visually-hidden">メモ</h1>{loading ? <div className="records-empty">読み込み中…</div> : spins.length ? <div className="records-grid">{spins.map((spin) => <RecordTile key={spin.id} spin={spin} armed={armedId === spin.id} highlighted={highlightedNumbers.has(spin.number)} onTap={() => tapRecord(spin)} />)}</div> : <div className="records-empty">メモはありません</div>}{hiddenCount > 0 && <div className="older-count">過去 {hiddenCount.toLocaleString("ja-JP")} 回も分析に含まれます</div>}</section>
     <section className="forecast-strip" aria-label="次のエリア予測">{SECTOR_KEYS.map((sector) => <span className={prediction.recommended === sector ? "forecast-top" : ""} key={sector}><b>{sector}</b><i>{prediction.scores[sector]}%</i></span>)}</section>
     <section className="coverage-strip" aria-label="2コラム2ダズン"><span>{coverage.columns.length ? coverage.columns.map((column) => COLUMN_NOTATION[column - 1]).join(" ") : "—"}</span><span>{coverage.dozens.length ? coverage.dozens.join(" ") : "—"}</span></section>
-    <section className="calculator" aria-label="入力"><div className="calculator-top"><div className="number-display"><b>{draft || "—"}</b></div><div className="rotation-buttons" aria-label="回転方向"><button type="button" className={displayedDirection === "left" ? "active" : ""} onClick={() => setChosenDirection("left")} aria-pressed={displayedDirection === "left"} aria-label="左回り"><span>↺</span></button><button type="button" className={displayedDirection === "right" ? "active" : ""} onClick={() => setChosenDirection("right")} aria-pressed={displayedDirection === "right"} aria-label="右回り"><span>↻</span></button></div></div><div className="calculator-body"><div className="number-pad">{[1,2,3,4,5,6,7,8,9].map((digit) => <button type="button" key={digit} onClick={() => appendDigit(String(digit))}>{digit}</button>)}<button type="button" className="key-muted" onClick={() => setDraft("")}>C</button><button type="button" onClick={() => appendDigit("0")}>0</button><button type="button" className="key-muted" onClick={() => setDraft((v) => v.slice(0,-1))} aria-label="1文字消す">⌫</button></div><button type="button" className="send-button" onClick={recordSpin} disabled={draft === "" || saving}><span>{saving ? "…" : "✓"}</span></button></div></section>
+    {selectedSpin ? <section className="calculator marking-calculator" aria-label="的中マーク入力">
+      <div className="calculator-top"><div className="number-display"><b>{selectedSpin.number}</b></div><button type="button" className="mark-done" onClick={() => { setSelectedSpinId(null); setArmedId(null); }} aria-label="マーク入力を閉じる">✓</button></div>
+      <div className="marking-pad">{BET_MARKS.map((mark) => <button type="button" key={mark} className={selectedSpin.marks.includes(mark) ? "active" : ""} disabled={!selectableMarks.has(mark)} aria-pressed={selectedSpin.marks.includes(mark)} onClick={() => toggleBetMark(mark)}>{mark}</button>)}</div>
+    </section> : <section className="calculator" aria-label="入力"><div className="calculator-top"><div className="number-display"><b>{draft || "—"}</b></div><div className="rotation-buttons" aria-label="回転方向"><button type="button" className={displayedDirection === "left" ? "active" : ""} onClick={() => setChosenDirection("left")} aria-pressed={displayedDirection === "left"} aria-label="左回り"><span>↺</span></button><button type="button" className={displayedDirection === "right" ? "active" : ""} onClick={() => setChosenDirection("right")} aria-pressed={displayedDirection === "right"} aria-label="右回り"><span>↻</span></button></div></div><div className="calculator-body"><div className="number-pad">{[1,2,3,4,5,6,7,8,9].map((digit) => <button type="button" key={digit} onClick={() => appendDigit(String(digit))}>{digit}</button>)}<button type="button" className="key-muted" onClick={() => setDraft("")}>C</button><button type="button" onClick={() => appendDigit("0")}>0</button><button type="button" className="key-muted" onClick={() => setDraft((v) => v.slice(0,-1))} aria-label="1文字消す">⌫</button></div><button type="button" className="send-button" onClick={recordSpin} disabled={draft === "" || saving}><span>{saving ? "…" : "✓"}</span></button></div></section>}
     {notice && <div className="toast" role="status">{notice}</div>}
   </main>;
 }
